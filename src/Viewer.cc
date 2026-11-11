@@ -27,7 +27,7 @@ namespace ORB_SLAM3
 
 Viewer::Viewer(System* pSystem, FrameDrawer *pFrameDrawer, MapDrawer *pMapDrawer, Tracking *pTracking, const string &strSettingPath, Settings* settings):
     both(false), mpSystem(pSystem), mpFrameDrawer(pFrameDrawer),mpMapDrawer(pMapDrawer), mpTracker(pTracking),
-    mbFinishRequested(false), mbFinished(true), mbStopped(true), mbStopRequested(false)
+    mbFinishRequested(false), mbFinished(false), mbStopped(true), mbStopRequested(false)
 {
     if(settings){
         newParameterLoader(settings);
@@ -161,10 +161,10 @@ bool Viewer::ParseViewerParamFile(cv::FileStorage &fSettings)
 
 void Viewer::Run()
 {
-    mbFinished = false;
     mbStopped = false;
 
-    pangolin::CreateWindowAndBind("ORB-SLAM3: Map Viewer",1024,768);
+    const char* mapWindowName = "ORB-SLAM3: Map Viewer";
+    pangolin::CreateWindowAndBind(mapWindowName,1024,768);
 
     // 3D Mouse handler requires depth testing to be enabled
     glEnable(GL_DEPTH_TEST);
@@ -384,7 +384,7 @@ void Viewer::Run()
 
         if(Stop())
         {
-            while(isStopped())
+            while(isStopped() && !CheckFinish())
             {
                 usleep(3000);
             }
@@ -394,6 +394,8 @@ void Viewer::Run()
             break;
     }
 
+    // Release OpenGL resources on the thread that owns the context.
+    pangolin::DestroyWindow(mapWindowName);
     SetFinish();
 }
 

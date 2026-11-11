@@ -24,8 +24,10 @@ namespace ORB_SLAM3
             void Run();
             cv::Mat Detect(const cv::Mat& imRGB, const cv::Mat& imDepth, const float maxBoxRatio);
             void SetTracker(Tracking* pTracker);
-            void InsertInput(const cv::Mat& imRGB, const cv::Mat& imDepth);
-            std::vector<cv::Mat> GetOutput();
+            void InsertInput(const cv::Mat& imRGB, const cv::Mat& imDepth, long frame=-1, double timestamp=-1);
+            std::vector<cv::Mat> GetOutput(long* frame=nullptr, double* timestamp=nullptr);
+            long mInputFrame=-1, mOutputFrame=-1;
+            double mInputTimestamp=-1, mOutputTimestamp=-1;
 
             bool CheckNewInput();
             bool CheckNewOutput();

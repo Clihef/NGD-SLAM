@@ -328,21 +328,25 @@ cv::Mat FrameDrawer::DrawRightFrame(float imageScale)
 
 cv::Mat FrameDrawer::DrawLKFrame(float imageScale)
 {
+    unique_lock<mutex> lock(mMutex);
     return mImLK;
 }
 
 void FrameDrawer:: SetLKFrame(cv::Mat LKFrame)
 {
+    unique_lock<mutex> lock(mMutex);
     mImLK = LKFrame;
 }
 
 cv::Mat FrameDrawer::DrawMaskFrame(float imageScale)
 {
+    unique_lock<mutex> lock(mMutex);
     return mImMask;
 }
 
 void FrameDrawer:: SetMaskFrame(cv::Mat maskFrame)
 {
+    unique_lock<mutex> lock(mMutex);
     mImMask = maskFrame;
 }
 

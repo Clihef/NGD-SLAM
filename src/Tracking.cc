@@ -20,6 +20,18 @@
 #include "Tracking.h"
 
 #include "ORBmatcher.h"
+#include "Diagnostics.h"
+#include <opencv2/imgcodecs.hpp>
+
+namespace {
+void ArchiveDiagnosticMask(long frame, const std::string& kind, const cv::Mat& mask) {
+    if(!std::getenv("NGD_DIAGNOSTIC_MASKS")) return;
+    static std::vector<std::pair<std::string,cv::Mat>> images;
+    if(frame>=140 && frame<=245 && frame%5==0) images.emplace_back("mask_"+kind+"_"+std::to_string(frame)+".png",mask.clone()*255);
+    if(frame==246 && kind=="prop") { for(const auto& image:images) cv::imwrite(image.first,image.second); images.clear(); }
+}
+}
+
 #include "FrameDrawer.h"
 #include "Converter.h"
 #include "G2oTypes.h"
@@ -1526,6 +1538,9 @@ Sophus::SE3f Tracking::GrabImageStereo(const cv::Mat &imRectLeft, const cv::Mat 
 
 Sophus::SE3f Tracking::GrabImageRGBD(const cv::Mat &imRGB, const cv::Mat &imD, const double &timestamp, string filename)
 {
+    if(DiagnosticEnabled()) { Diagnostic()=FrameDiagnostic(); Diagnostic().state_before=mState; }
+    static long maskSource=-1;
+    static double maskTimestamp=-1;
     mImGray = imRGB;
     mImDepth = imD;
     mImRGB = imRGB.clone();
@@ -1564,15 +1579,18 @@ Sophus::SE3f Tracking::GrabImageRGBD(const cv::Mat &imRGB, const cv::Mat &imD, c
     if(RGBDInitialized) mbStartOpticalFlow = true;
     else mbStartOpticalFlow = false;
 
-    mpYOLO->InsertInput(mImRGB, mImDepth2);
+    mpYOLO->InsertInput(mImRGB, mImDepth2, mFrameNum-1, timestamp);
 
     // Dynamic Tracking
     while(true)
     {
-        std::vector<cv::Mat> outputYOLO = mpYOLO->GetOutput();
+        long semanticFrame=-1; double semanticTimestamp=-1;
+        std::vector<cv::Mat> outputYOLO = mpYOLO->GetOutput(&semanticFrame, &semanticTimestamp);
+        if(DiagnosticEnabled() && outputYOLO.size()==2) { Diagnostic().semantic_frame=semanticFrame; Diagnostic().semantic_timestamp=semanticTimestamp; ArchiveDiagnosticMask(semanticFrame,"semantic",outputYOLO[1]); }
         
         if(outputYOLO.size() == 2 && mFrameNum == 1)
         {
+            maskSource=semanticFrame; maskTimestamp=semanticTimestamp;
             mImMask = outputYOLO[1];
             break;
         }
@@ -1585,7 +1603,9 @@ Sophus::SE3f Tracking::GrabImageRGBD(const cv::Mat &imRGB, const cv::Mat &imD, c
 
             int maskSizeYOLO = cv::countNonZero(outputYOLO[1]);
             int maskSizeLast = cv::countNonZero(mImMaskLastKey);
-            if(maskSizeYOLO == 0 && maskSizeLast > 0 && isLargeRotation) break;
+            if(DiagnosticEnabled()) Diagnostic().rotation_gate_deg=rollDeg;
+            if(maskSizeYOLO == 0 && maskSizeLast > 0 && isLargeRotation) { if(DiagnosticEnabled()) Diagnostic().mask_rejected=1; break; }
+            maskSource=semanticFrame; maskTimestamp=semanticTimestamp;
 
             mImGrayLastKey = outputYOLO[0];
             mImMaskLastKey = outputYOLO[1];
@@ -1593,7 +1613,9 @@ Sophus::SE3f Tracking::GrabImageRGBD(const cv::Mat &imRGB, const cv::Mat &imD, c
         }
         else if(mFrameNum > 1) break;
     }
+    if(DiagnosticEnabled()) { Diagnostic().mask_source=maskSource; Diagnostic().mask_timestamp=maskTimestamp; }
     if(mFrameNum > 1) PredictCurrentMask();
+    if(DiagnosticEnabled()) { Diagnostic().mask_pixels=cv::countNonZero(mImMask); ArchiveDiagnosticMask(mFrameNum-1,"prop",mImMask); }
 
     // Static Tracking
     if(mbStartOpticalFlow)
@@ -1602,13 +1624,15 @@ Sophus::SE3f Tracking::GrabImageRGBD(const cv::Mat &imRGB, const cv::Mat &imD, c
         mCurrentFrame = Frame(mbStartOpticalFlow);
         mCurrentFrame.mTimeStamp = timestamp;
 
-        TrackWithOpticalFlow();
+        bool flowOK=TrackWithOpticalFlow();
+        if(DiagnosticEnabled()) Diagnostic().flow_ok=flowOK;
     }
 
     if(!RGBDInitialized) mbNeedKF = true;
     else if(RGBDInitialized) mbNeedKF = NeedNewKeyFrame();
 
     // Keyframe Tracking
+    if(DiagnosticEnabled()) Diagnostic().orb_track=mbNeedKF;
     if(mbNeedKF)
     {
         Sophus::SE3f Tcw;
@@ -1645,6 +1669,8 @@ Sophus::SE3f Tracking::GrabImageRGBD(const cv::Mat &imRGB, const cv::Mat &imD, c
     // Record last frame (used by TrackWithOpticalFlow)
     mImGrayLastLK = mImGray;
     mLastFrameLK = Frame(mCurrentFrame);
+    if(DiagnosticEnabled()) WriteDiagnostic(mFrameNum-1,mCurrentFrame.mnId,timestamp,mState,mnMatchesInliers,mbNeedKF);
+    maskSource=mFrameNum-1; maskTimestamp=timestamp;
     mFrameNum++;
 
     auto track_end = std::chrono::high_resolution_clock::now(); //******************************************
@@ -2825,6 +2851,7 @@ bool Tracking::TrackReferenceKeyFrame()
     vector<MapPoint*> vpMapPointMatches;
 
     int nmatches = matcher.SearchByBoW(mpReferenceKF,mCurrentFrame,vpMapPointMatches);
+    if(DiagnosticEnabled()) Diagnostic().ref_matches=nmatches;
 
     if(nmatches<15)
     {
@@ -2993,6 +3020,7 @@ bool Tracking::TrackWithMotionModel()
 
     }
 
+    if(DiagnosticEnabled()) Diagnostic().motion_matches=nmatches;
     if(nmatches<20)
     {
         Verbose::PrintMess("Not enough matches!!", Verbose::VERBOSITY_NORMAL);
@@ -3048,6 +3076,7 @@ bool Tracking::TrackWithOpticalFlow()
     ORBmatcher matcher(0.9,true);
     int nmatches = matcher.SearchByOpticalFlow(mCurrentFrame, mLastFrameLK, mImGray, mImGrayLastLK, mImMask);
 
+    if(DiagnosticEnabled()) Diagnostic().flow_matches=nmatches;
     if(nmatches < 20)
     {
         std::cout << "Not enough matches for SearchByOpticalFlow() !!" << std::endl;
@@ -3087,7 +3116,8 @@ bool Tracking::TrackWithOpticalFlow()
     std::memcpy(T.data, t_eigen.data(), 3 * sizeof(float));
     cv::Rodrigues(R_matrix, R_vector);
 
-    cv::solvePnPRansac(currMapPoints, currKeyPoints, mK, mDistCoef , R_vector, T, false, 100, 5, 0.99, ransacInlier, cv::SOLVEPNP_ITERATIVE);
+    bool diagnosticPnpOK=cv::solvePnPRansac(currMapPoints, currKeyPoints, mK, mDistCoef , R_vector, T, false, 100, 5, 0.99, ransacInlier, cv::SOLVEPNP_ITERATIVE);
+    if(DiagnosticEnabled()) { Diagnostic().pnp_ok=diagnosticPnpOK; Diagnostic().pnp_inliers=ransacInlier.size(); }
     cv::Rodrigues(R_vector, R);
 
     cv::Mat R_float, T_float;
@@ -3130,9 +3160,11 @@ bool Tracking::TrackWithOpticalFlow()
     float currVeloMagnitude = currVelocity.translation().norm();
     float lastVeloMagnitude = mVelocityLK.translation().norm();
 
+    if(DiagnosticEnabled()) Diagnostic().velocity_reject=0;
     if (currVeloMagnitude > 3 * lastVeloMagnitude && currVeloMagnitude > 0.05)
     {
         mnMatchesInliers = 0;
+        if(DiagnosticEnabled()) Diagnostic().velocity_reject=1;
         mCurrentFrame.SetPose(initTcw);
     }
     else
@@ -3418,6 +3450,7 @@ void Tracking::CreateNewKeyFrame()
     if(!mpLocalMapper->SetNotStop(true))
         return;
 
+    if(DiagnosticEnabled()) Diagnostic().kf_created=1;
     KeyFrame* pKF = new KeyFrame(mCurrentFrame,mpAtlas->GetCurrentMap(),mpKeyFrameDB);
 
     if(mpAtlas->isImuInitialized()) //  || mpLocalMapper->IsInitializing())
@@ -3806,6 +3839,7 @@ void Tracking::UpdateLocalKeyFrames()
 
 bool Tracking::Relocalization()
 {
+    if(DiagnosticEnabled()) { Diagnostic().reloc_called=1; Diagnostic().reloc_ok=0; }
     Verbose::PrintMess("Starting relocalization", Verbose::VERBOSITY_NORMAL);
     // Compute Bag of Words Vector
     mCurrentFrame.ComputeBoW();
@@ -3968,6 +4002,7 @@ bool Tracking::Relocalization()
     else
     {
         mnLastRelocFrameId = mCurrentFrame.mnId;
+        if(DiagnosticEnabled()) Diagnostic().reloc_ok=1;
         cout << "Relocalized!!" << endl;
         return true;
     }
@@ -4303,19 +4338,23 @@ void Tracking::PredictCurrentMask()
 
     ExtractDynaPoints(lastDynaPoints, mImGrayLastKey, mImMaskLastKey, 15);
 
+    if(DiagnosticEnabled()) Diagnostic().dynamic_input=lastDynaPoints.size();
     if(!lastDynaPoints.empty())
     {
         cv::calcOpticalFlowPyrLK(mImGrayLastKey, mImGray, lastDynaPoints, currDynaPoints, status, error);
 
         for(size_t j = 0; j < status.size(); ++j)
         {
-            if(status[j]) 
+            const cv::Point2f& point = currDynaPoints[j];
+            if(status[j] && point.x >= 0 && point.x < mImDepth2.cols &&
+               point.y >= 0 && point.y < mImDepth2.rows)
             {
                 float depth = mImDepth2.at<float>(currDynaPoints[j].y, currDynaPoints[j].x);
                 if (depth >= 0.05) trackedDynaPoints.push_back(cv::Point3f(currDynaPoints[j].x, currDynaPoints[j].y, depth));
             }
         }
 
+        if(DiagnosticEnabled()) Diagnostic().dynamic_tracked=trackedDynaPoints.size();
         ClusterWithDBSCAN(clusters, trackedDynaPoints, 50.0f, 15);
         CreateMaskFromClusters(clusters);
     }
@@ -4562,7 +4601,8 @@ void Tracking::CreateMaskFromClusters(const std::map<int, std::vector<cv::Point3
 
         // Find connected components
         cv::Mat labels, stats, centroids;
-        int nLabels = cv::connectedComponentsWithStats(localMask, labels, stats, centroids, 4, CV_32S);
+        // Use SAUF to avoid a crash in OpenCV 4.5.5's default 4-connected implementation.
+        int nLabels = cv::connectedComponentsWithStats(localMask, labels, stats, centroids, 4, CV_32S, cv::CCL_WU);
 
         // Identify the largest component
         int largestLabel = 0;

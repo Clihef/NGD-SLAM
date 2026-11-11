@@ -23,6 +23,7 @@
 #include <thread>
 #include <pangolin/pangolin.h>
 #include <iomanip>
+#include <stdexcept>
 #include <openssl/md5.h>
 #include <boost/serialization/base_object.hpp>
 #include <boost/serialization/string.hpp>
@@ -529,12 +530,16 @@ void System::Shutdown()
     mpLocalMapper->RequestFinish();
     mpLoopCloser->RequestFinish();
     mpYOLO->RequestFinish();
-    /*if(mpViewer)
+    if(mpViewer)
     {
         mpViewer->RequestFinish();
-        while(!mpViewer->isFinished())
-            usleep(5000);
-    }*/
+        // The viewer's Stop button also calls Shutdown.
+        if(std::this_thread::get_id() != mptViewer->get_id())
+        {
+            while(!mpViewer->isFinished())
+                usleep(5000);
+        }
+    }
 
     // Wait until all thread have effectively stopped
     /*while(!mpLocalMapper->isFinished() || !mpLoopCloser->isFinished() || mpLoopCloser->isRunningGBA())
@@ -570,6 +575,46 @@ void System::Shutdown()
 bool System::isShutDown() {
     unique_lock<mutex> lock(mMutexReset);
     return mbShutDown;
+}
+
+void System::SaveMapPointsPLY(const string &filename)
+{
+    if(!isShutDown())
+        throw std::logic_error("Call Shutdown before exporting map points");
+
+    // Complete background writes before reading the final map and trajectories.
+    if(mptLocalMapping->joinable())
+        mptLocalMapping->join();
+    if(mptLoopClosing->joinable())
+        mptLoopClosing->join();
+    if(mptYOLO->joinable())
+        mptYOLO->join();
+    while(mpLoopCloser->isRunningGBA())
+        usleep(5000);
+
+    vector<pair<Eigen::Vector3f, unsigned long>> points;
+    for(Map* map : mpAtlas->GetAllMaps())
+    {
+        if(map->IsBad())
+            continue;
+        for(MapPoint* point : map->GetAllMapPoints())
+        {
+            if(point && !point->isBad())
+                points.emplace_back(point->GetWorldPos(), map->GetId());
+        }
+    }
+
+    ofstream output(filename);
+    if(!output)
+        throw std::runtime_error("Cannot open map point output: " + filename);
+    output << "ply\nformat ascii 1.0\nelement vertex " << points.size()
+           << "\nproperty float x\nproperty float y\nproperty float z"
+           << "\nproperty uint map_id\nend_header\n" << setprecision(9);
+    for(const auto& point : points)
+        output << point.first.x() << " " << point.first.y() << " "
+               << point.first.z() << " " << point.second << "\n";
+    if(!output)
+        throw std::runtime_error("Cannot write map point output: " + filename);
 }
 
 void System::SaveTrajectoryTUM(const string &filename)

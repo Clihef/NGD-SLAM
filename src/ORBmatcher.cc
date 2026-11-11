@@ -18,6 +18,7 @@
 
 
 #include "ORBmatcher.h"
+#include "Diagnostics.h"
 
 #include<limits.h>
 
@@ -2019,6 +2020,7 @@ namespace ORB_SLAM3
         
         CurrentFrame.mvKeysUn.clear();
         CurrentFrame.mvpMapPoints.clear();
+        CurrentFrame.N = 0;
 
         // Get key points and map points from last frame
         for (int i=0; i < LastFrame.mvpMapPoints.size(); ++i)
@@ -2030,6 +2032,11 @@ namespace ORB_SLAM3
             }
         }
 
+        if(DiagnosticEnabled()) Diagnostic().flow_input=lastKeyPoints.size();
+        // No mature map points remain after tracking loss; let keyframe tracking recover.
+        if (lastKeyPoints.empty())
+            return 0;
+
         if (LastImg.channels() > 1)
             cv::cvtColor(LastImg, LastImg, cv::COLOR_BGR2GRAY);
 
@@ -2039,10 +2046,14 @@ namespace ORB_SLAM3
         // Find matches using LK optical flow
         cv::calcOpticalFlowPyrLK(LastImg, CurrImg, lastKeyPoints, currKeyPoints, status, error);
         
+        if(DiagnosticEnabled()) { Diagnostic().flow_status=0; for(auto s:status) Diagnostic().flow_status+=bool(s); }
         // Remove points without match
         for (size_t i = 0; i < currKeyPoints.size(); i++)
         {
-            if (status[i] && imMask.at<uchar>(currKeyPoints[i].y, currKeyPoints[i].x) == 0)
+            const cv::Point2f& point = currKeyPoints[i];
+            if (status[i] && point.x >= 0 && point.x < imMask.cols &&
+                point.y >= 0 && point.y < imMask.rows &&
+                imMask.at<uchar>(point.y, point.x) == 0)
             {
                 cv::KeyPoint kp(currKeyPoints[i], 1.0f);
                 CurrentFrame.mvKeysUn.push_back(kp);

@@ -20,6 +20,8 @@
 #include<algorithm>
 #include<fstream>
 #include<chrono>
+#include<cstdlib>
+#include<iomanip>
 
 #include<opencv2/core/core.hpp>
 
@@ -59,7 +61,20 @@ int main(int argc, char **argv)
     }
 
     // Create SLAM system. It initializes all system threads and gets ready to process frames.
-    ORB_SLAM3::System SLAM(argv[1],argv[2],ORB_SLAM3::System::RGBD,true);
+    const bool recordExperiment = std::getenv("NGD_RECORD_EXPERIMENT") != nullptr;
+    const bool useViewer = std::getenv("NGD_NO_VIEWER") == nullptr;
+    ofstream frameMetrics;
+    if(recordExperiment)
+    {
+        frameMetrics.open("frame_metrics.csv");
+        if(!frameMetrics)
+        {
+            cerr << "Cannot open frame_metrics.csv" << endl;
+            return 1;
+        }
+        frameMetrics << "frame,timestamp,tracking_ms,state\n" << setprecision(17);
+    }
+    ORB_SLAM3::System SLAM(argv[1],argv[2],ORB_SLAM3::System::RGBD,useViewer);
     float imageScale = SLAM.GetImageScale();
 
     // Vector for tracking time statistics
@@ -112,6 +127,9 @@ int main(int argc, char **argv)
         double ttrack= std::chrono::duration_cast<std::chrono::duration<double> >(t2 - t1).count();
 
         vTimesTrack[ni]=ttrack;
+        if(recordExperiment)
+            frameMetrics << ni << "," << tframe << "," << ttrack*1000.0
+                         << "," << SLAM.GetTrackingState() << "\n";
 
         // Wait to load the next frame
         double T=0;
@@ -126,6 +144,16 @@ int main(int argc, char **argv)
 
     // Stop all threads
     SLAM.Shutdown();
+    if(recordExperiment)
+    {
+        frameMetrics.close();
+        if(!frameMetrics)
+        {
+            cerr << "Cannot write frame_metrics.csv" << endl;
+            return 1;
+        }
+        SLAM.SaveMapPointsPLY("MapPoints.ply");
+    }
 
     // Tracking time statistics
     sort(vTimesTrack.begin(),vTimesTrack.end());

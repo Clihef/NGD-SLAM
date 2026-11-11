@@ -125,7 +125,8 @@ namespace ORB_SLAM3
 
 				// ========== Find connected components ==========
 				cv::Mat labels, stats, centroids;
-				int nLabels = cv::connectedComponentsWithStats(localMask, labels, stats, centroids, 4, CV_32S);
+				// Use SAUF to avoid a crash in OpenCV 4.5.5's default 4-connected implementation.
+				int nLabels = cv::connectedComponentsWithStats(localMask, labels, stats, centroids, 4, CV_32S, cv::CCL_WU);
 
 				// Identify the largest component
 				int largestLabel = 0;
@@ -192,21 +193,24 @@ namespace ORB_SLAM3
 		return(!mOutputPair.empty());
 	}
 
-	void YOLO::InsertInput(const cv::Mat& imRGB, const cv::Mat& imDepth)
+	void YOLO::InsertInput(const cv::Mat& imRGB, const cv::Mat& imDepth, long frame, double timestamp)
 	{
 		std::unique_lock<std::mutex> lock(mInputMutex);
 		mInputPair.clear();
 		mInputPair.push_back(imRGB);
 		mInputPair.push_back(imDepth);
+        mInputFrame=frame; mInputTimestamp=timestamp;
 	}
 
-	std::vector<cv::Mat> YOLO::GetOutput()
+	std::vector<cv::Mat> YOLO::GetOutput(long* frame, double* timestamp)
 	{
 		std::unique_lock<std::mutex> lock(mOutputMutex);
 		std::vector<cv::Mat> returnedOutput;
 		if (mOutputPair.size() == 2)
 		{
 			returnedOutput = std::move(mOutputPair);
+                if(frame) *frame=mOutputFrame;
+                if(timestamp) *timestamp=mOutputTimestamp;
 			mOutputPair.clear();
 		}
 		return returnedOutput;
@@ -222,6 +226,7 @@ namespace ORB_SLAM3
 			{
 				cv::Mat imRGB = mInputPair[0];
 				cv::Mat imDepth = mInputPair[1];
+                long sourceFrame=mInputFrame; double sourceTimestamp=mInputTimestamp;
 				mInputPair.clear();
 				inputLock.unlock();
 
@@ -233,6 +238,7 @@ namespace ORB_SLAM3
 				mOutputPair.clear();
 				mOutputPair.push_back(imGray);
 				mOutputPair.push_back(imMask);
+                mOutputFrame=sourceFrame; mOutputTimestamp=sourceTimestamp;
 			}
 			else
 			{
