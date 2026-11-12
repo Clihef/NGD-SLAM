@@ -17,6 +17,8 @@ public:
     using Tracking::ComputePixelPotential;
     using Tracking::ExtractDynaPoints;
     using Tracking::StoreCurrentFramePose;
+    bool RunMotionModel() { return TrackWithMotionModel(); }
+    void SetMotion(const Sophus::SE3f& delta,double interval) { mVelocity=delta; mVelocityInterval=interval; }
     void SetReference(KeyFrame* reference) { mpReferenceKF=reference; }
     void SetCooldown() { mnLastRelocFrameId=Frame::nNextId; mbVelocity=false; }
 };
@@ -66,6 +68,22 @@ int main(int argc,char** argv)
     YOLO semantic(.5,.4,320,320,root+"/Thirdparty/YOLO/coco.names",root+"/Thirdparty/YOLO/yolo-fastest-xl.cfg",root+"/Thirdparty/YOLO/yolo-fastest-xl.weights","test");
     assert(!semantic.CheckFinish()); tracker.SetYOLO(&semantic);
 
+    {
+        Frame last(true); last.SetPose(Sophus::SE3f()); last.mTimeStamp=1;
+        Sophus::SE3f::Tangent twist; twist << .2f,-.1f,.05f,0,.3f,0;
+        tracker.mLastFrame=Frame(last);tracker.mbStartOpticalFlow=true;
+        for(double dt : {.068,.236,.5,0.0,-.1}) {
+            tracker.mCurrentFrame=Frame(true);tracker.mCurrentFrame.mTimeStamp=1+dt;
+            tracker.SetMotion(Sophus::SE3f::exp(twist*.236f),.236);
+            assert(!tracker.RunMotionModel());
+            const auto expected=Sophus::SE3f::exp(twist*float(dt>0 ? dt : 0));
+            assert((tracker.mCurrentFrame.GetPose().matrix()-expected.matrix()).norm()<1e-6);
+        }
+        tracker.mCurrentFrame=Frame(true);tracker.mCurrentFrame.mTimeStamp=1.2;
+        tracker.SetMotion(Sophus::SE3f::exp(twist*.236f),0);
+        assert(!tracker.RunMotionModel());assert((tracker.mCurrentFrame.GetPose().matrix()-Sophus::SE3f().matrix()).norm()<1e-6);
+        std::cout << "PASS: production motion prediction respects unequal ORB/input intervals and absent history\n";
+    }
     Frame seed(true); seed.mpORBvocabulary=&vocabulary; seed.SetPose(Sophus::SE3f()); seed.mTimeStamp=1;
     KeyFrame* reference=nullptr;
     for(int i=0;i<31;++i) { reference=new KeyFrame(seed,atlas.GetCurrentMap(),nullptr); atlas.AddKeyFrame(reference); }

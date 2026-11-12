@@ -2980,12 +2980,16 @@ bool Tracking::TrackWithMotionModel()
     }
     else if (!mbStartOpticalFlow || !mCurrentFrame.HasValidPose())
     {
-        if(mbStartOpticalFlow && mLastFrameLK.HasValidPose())
+        if(RecoveryProbe::Enabled(mFrameNum-1) && mbStartOpticalFlow && mLastFrameLK.HasValidPose())
             RecoveryProbe::Compare(mFrameNum-1,mCurrentFrame,mLastFrame,mLastFrameLK,
                                    mVelocity*mLastFrame.GetPose(),
                                    (mVelocityInterval>0 ? Sophus::SE3f::exp(mVelocity.log()*float((mCurrentFrame.mTimeStamp-mLastFrame.mTimeStamp)/mVelocityInterval)) : mVelocity)*mLastFrame.GetPose(),
                                    mVelocityLK*mLastFrameLK.GetPose());
-        mCurrentFrame.SetPose(mVelocity * mLastFrame.GetPose());
+        // mVelocity spans the previous two ORB frames, not one input frame.
+        const double targetInterval=mCurrentFrame.mTimeStamp-mLastFrame.mTimeStamp;
+        double ratio=(mVelocityInterval>0 && targetInterval>0) ? targetInterval/mVelocityInterval : 0;
+        if(!std::isfinite(ratio)) ratio=0;
+        mCurrentFrame.SetPose(Sophus::SE3f::exp(mVelocity.log()*float(ratio))*mLastFrame.GetPose());
     }
 
 
