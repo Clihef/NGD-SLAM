@@ -21,6 +21,7 @@
 
 #include "ORBmatcher.h"
 #include "Diagnostics.h"
+#include "RpyRecoveryProbe.h"
 #include "ExperimentObservation.h"
 #include <opencv2/imgcodecs.hpp>
 
@@ -1669,6 +1670,7 @@ Sophus::SE3f Tracking::GrabImageRGBD(const cv::Mat &imRGB, const cv::Mat &imD, c
     // Record last frame (used by TrackWithOpticalFlow)
     mImGrayLastLK = mImGray;
     mLastFrameLK = Frame(mCurrentFrame);
+    RecoveryProbe::Pose(mFrameNum-1,timestamp,"frame_final",mCurrentFrame.GetPose(),mCurrentFrame.N,mnMatchesInliers,mLastFrame.mTimeStamp,mLastFrameLK.mTimeStamp);
     ObservePose(mFrameNum-1,timestamp,mState,mCurrentFrame.HasPose(),mCurrentFrame.GetPose(),
                 mpAtlas->GetCurrentMap()->GetId(),mlFrameTimes.size()>recordedBefore);
     if(DiagnosticEnabled()) WriteDiagnostic(mFrameNum-1,mCurrentFrame.mnId,timestamp,mState,mnMatchesInliers,mbNeedKF);
@@ -2334,6 +2336,7 @@ void Tracking::Track()
             {
                 Sophus::SE3f LastTwc = mLastFrame.GetPose().inverse();
                 mVelocity = mCurrentFrame.GetPose() * LastTwc;
+                mVelocityInterval = mCurrentFrame.mTimeStamp-mLastFrame.mTimeStamp;
                 mbVelocity = true;
             }
             else {
@@ -2977,6 +2980,11 @@ bool Tracking::TrackWithMotionModel()
     }
     else if (!mbStartOpticalFlow || !mCurrentFrame.HasValidPose())
     {
+        if(mbStartOpticalFlow && mLastFrameLK.HasValidPose())
+            RecoveryProbe::Compare(mFrameNum-1,mCurrentFrame,mLastFrame,mLastFrameLK,
+                                   mVelocity*mLastFrame.GetPose(),
+                                   (mVelocityInterval>0 ? Sophus::SE3f::exp(mVelocity.log()*float((mCurrentFrame.mTimeStamp-mLastFrame.mTimeStamp)/mVelocityInterval)) : mVelocity)*mLastFrame.GetPose(),
+                                   mVelocityLK*mLastFrameLK.GetPose());
         mCurrentFrame.SetPose(mVelocity * mLastFrame.GetPose());
     }
 
@@ -3018,6 +3026,7 @@ bool Tracking::TrackWithMotionModel()
 
     // Optimize frame pose with all matches
     Optimizer::PoseOptimization(&mCurrentFrame);
+    RecoveryProbe::Pose(mFrameNum-1,mCurrentFrame.mTimeStamp,"motion_post",mCurrentFrame.GetPose(),nmatches,-1,mLastFrame.mTimeStamp,mLastFrameLK.mTimeStamp);
 
     // Discard outliers
     int nmatchesMap = 0;
@@ -3136,6 +3145,11 @@ bool Tracking::TrackWithOpticalFlow()
     Sophus::SE3f currTcw = Sophus::SE3f(rotation, translation);
 
     if(!Frame::IsValidPose(currTcw)) { mnMatchesInliers=0; mCurrentFrame.InvalidatePose(); return false; }
+
+    RecoveryProbe::Pose(mFrameNum-1,mCurrentFrame.mTimeStamp,"pnp_candidate",currTcw,nmatches,ransacInlier.size(),mLastFrame.mTimeStamp,mLastFrameLK.mTimeStamp);
+    if(RecoveryProbe::Enabled(mFrameNum-1) && mFrameNum-1==564) {
+        cv::imwrite("probe_rgb_564.png",mImRGB);cv::imwrite("probe_mask_564.png",mImMask*255);
+    }
 
     // ---------- Draw extracted LK points and get inliers ----------
     cv::Mat imgWithLKPoints = mImGray.clone();
@@ -3269,6 +3283,7 @@ bool Tracking::TrackLocalMap()
 
     // Decide if the tracking was succesful
     // More restrictive if there was a relocalization recently
+    RecoveryProbe::Pose(mFrameNum-1,mCurrentFrame.mTimeStamp,"local_post",mCurrentFrame.GetPose(),mCurrentFrame.N,mnMatchesInliers,mLastFrame.mTimeStamp,mLastFrameLK.mTimeStamp);
     mpLocalMapper->mnMatchesInliers=mnMatchesInliers;
     if(mCurrentFrame.mnId<mnLastRelocFrameId+mMaxFrames && mnMatchesInliers<50)
         return false;

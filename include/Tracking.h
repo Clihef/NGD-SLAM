@@ -362,6 +362,7 @@ protected:
     //Motion Model
     bool mbVelocity{false};
     Sophus::SE3f mVelocity;
+    double mVelocityInterval = 0;
 
     //Color order (true RGB, false BGR, ignored if grayscale)
     bool mbRGB;
