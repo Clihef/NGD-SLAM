@@ -1,3 +1,4 @@
+#include "ExperimentObservation.h"
 /**
 * This file is part of ORB-SLAM3
 *
@@ -75,6 +76,7 @@ int main(int argc, char **argv)
         frameMetrics << "frame,timestamp,tracking_ms,state,pose_valid\n" << setprecision(17);
     }
     ORB_SLAM3::System SLAM(argv[1],argv[2],ORB_SLAM3::System::RGBD,useViewer);
+    ORB_SLAM3::InitializeExperimentSeed();
     float imageScale = SLAM.GetImageScale();
 
     // Vector for tracking time statistics

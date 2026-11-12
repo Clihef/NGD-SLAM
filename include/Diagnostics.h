@@ -5,7 +5,7 @@
 #include <iomanip>
 namespace ORB_SLAM3 {
 struct FrameDiagnostic {
-    int pose_valid=0, pose_saved=0, fallback_forced=0;
+    int pose_valid=0, pose_saved=0, fallback_forced=0, orb_ok=-1;
     int state_before=-1, flow_input=-1, flow_status=-1, flow_matches=-1, pnp_ok=-1, pnp_inliers=-1, velocity_reject=-1, flow_ok=-1;
     int orb_track=0, ref_matches=-1, motion_matches=-1, kf_created=0, reloc_called=0, reloc_ok=-1;
     long semantic_frame=-1, mask_source=-1;

@@ -21,6 +21,7 @@
 
 #include "ORBmatcher.h"
 #include "Diagnostics.h"
+#include "ExperimentObservation.h"
 #include <opencv2/imgcodecs.hpp>
 
 namespace {
@@ -1541,6 +1542,7 @@ Sophus::SE3f Tracking::GrabImageStereo(const cv::Mat &imRectLeft, const cv::Mat 
 Sophus::SE3f Tracking::GrabImageRGBD(const cv::Mat &imRGB, const cv::Mat &imD, const double &timestamp, string filename)
 {
     if(DiagnosticEnabled()) { Diagnostic()=FrameDiagnostic(); Diagnostic().state_before=mState; }
+    const auto recordedBefore=mlFrameTimes.size();
     static long maskSource=-1;
     static double maskTimestamp=-1;
     mImGray = imRGB;
@@ -1667,6 +1669,8 @@ Sophus::SE3f Tracking::GrabImageRGBD(const cv::Mat &imRGB, const cv::Mat &imD, c
     // Record last frame (used by TrackWithOpticalFlow)
     mImGrayLastLK = mImGray;
     mLastFrameLK = Frame(mCurrentFrame);
+    ObservePose(mFrameNum-1,timestamp,mState,mCurrentFrame.HasPose(),mCurrentFrame.GetPose(),
+                mpAtlas->GetCurrentMap()->GetId(),mlFrameTimes.size()>recordedBefore);
     if(DiagnosticEnabled()) WriteDiagnostic(mFrameNum-1,mCurrentFrame.mnId,timestamp,mState,mnMatchesInliers,mbNeedKF);
     maskSource=mFrameNum-1; maskTimestamp=timestamp;
     mFrameNum++;
@@ -2027,6 +2031,7 @@ void Tracking::Track()
 
         //mpFrameDrawer->Update(this);
 
+        if(DiagnosticEnabled()) Diagnostic().orb_ok=(mState==OK);
         if(mState!=OK) // If rightly initialized, mState=OK
         {
             mLastFrame = Frame(mCurrentFrame);
@@ -2258,6 +2263,7 @@ void Tracking::Track()
         }
 
         if(bOK && !mCurrentFrame.HasValidPose()) bOK=false;
+        if(DiagnosticEnabled()) Diagnostic().orb_ok=bOK;
         if(bOK)
             mState = OK;
         else if (mState == OK)
