@@ -1,0 +1,45 @@
+{
+  "versions": [
+    "B0",
+    "B3"
+  ],
+  "not_run": [
+    "B1",
+    "B2"
+  ],
+  "rpy_repetitions_per_version": 10,
+  "other_sequence_repetitions_per_version": 5,
+  "sequence_pairs": {
+    "rpy": 866,
+    "xyz": 827,
+    "halfsphere": 1021,
+    "static": 717
+  },
+  "schedule": "seed-blocked, balanced randomized order; strictly serial; no discarded/retried failures",
+  "seed_start": 1001,
+  "viewer": true,
+  "recording": false,
+  "diagnostics": true,
+  "mask_snapshots": false,
+  "validity": "state OK AND pose_set AND finite normalized transform AND successful actual final tracking stage",
+  "gt_association": "fixed input-to-GT mapping using all input times, max difference .02 s; duplicate GT timestamp keeps last",
+  "alignment_for_online_quality": "single transform fitted on ALL GT-eligible inputs within first 2 dataset seconds; mean relative orientation projected to SO(3), mean translation; no scale; no realignment after loss/map reset",
+  "calibration_missing_policy": "if any predeclared calibration input lacks an accepted pose, mark calibration failed and full-sequence quality unavailable/zero, never move the window",
+  "translation_thresholds_m": [
+    0.05,
+    0.1,
+    0.2
+  ],
+  "rotation_thresholds_deg": [
+    5,
+    10
+  ],
+  "primary_quality_thresholds": {
+    "translation_m": 0.1,
+    "rotation_deg": 5
+  },
+  "quality_denominator": "all predeclared GT-matched input frames, identical for every version/run",
+  "recovery": "start at first unaccepted input, end at first of 5 consecutive accepted and primary-quality-compliant GT-matched inputs; unresolved events retained as right-censored",
+  "accuracy": "final optimized trajectory, accepted timestamps only; per-run support and 20-way common RPY support; SE3 alignment, fixed scale 1; shared nearest-1s RPE pair lists",
+  "efficiency": "all input frames, median/p95 ms and deadline misses; same observer overhead; no recording"
+}
