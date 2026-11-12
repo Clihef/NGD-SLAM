@@ -60,6 +60,8 @@ Tracking::Tracking(System *pSys, ORBVocabulary* pVoc, FrameDrawer *pFrameDrawer,
     mpFrameDrawer(pFrameDrawer), mpMapDrawer(pMapDrawer), mpAtlas(pAtlas), mnLastRelocFrameId(0), time_recently_lost(5.0),
     mnInitialFrameId(0), mbCreatedMap(false), mnFirstFrameId(0), mpCamera2(nullptr), mpLastKeyFrame(static_cast<KeyFrame*>(NULL))
 {
+    mnMatchesInliers=0;
+    mpReferenceKF=nullptr;
     // Load camera parameters from settings file
     if(settings){
         newParameterLoader(settings);
@@ -1573,11 +1575,9 @@ Sophus::SE3f Tracking::GrabImageRGBD(const cv::Mat &imRGB, const cv::Mat &imD, c
 
     auto track_start = std::chrono::high_resolution_clock::now(); //****************************************
 
-    bool RGBDInitialized = false;
-    if(mFrameNum > 3) RGBDInitialized = true;
-
-    if(RGBDInitialized) mbStartOpticalFlow = true;
-    else mbStartOpticalFlow = false;
+    const bool mapInitialized = (mState==OK || mState==RECENTLY_LOST) && mpReferenceKF;
+    const bool useOpticalFlow = mapInitialized && mState==OK && mFrameNum>3 && mLastFrameLK.HasValidPose();
+    mbStartOpticalFlow = useOpticalFlow;
 
     mpYOLO->InsertInput(mImRGB, mImDepth2, mFrameNum-1, timestamp);
 
@@ -1596,10 +1596,10 @@ Sophus::SE3f Tracking::GrabImageRGBD(const cv::Mat &imRGB, const cv::Mat &imD, c
         }
         else if(outputYOLO.size() == 2 && mFrameNum > 1)
         {
-            Eigen::Quaternionf q = mLastFrameLK.GetPose().unit_quaternion();
+            Eigen::Quaternionf q = mLastFrameLK.HasValidPose() ? mLastFrameLK.GetPose().unit_quaternion() : Eigen::Quaternionf::Identity();
             float roll = std::atan2(2.0 * (q.w() * q.z() + q.x() * q.y()), 1.0 - 2.0 * (q.z() * q.z() + q.x() * q.x()));
             float rollDeg = roll * 180.0 / CV_PI;
-            bool isLargeRotation = std::abs(rollDeg > 10);
+            bool isLargeRotation = std::abs(rollDeg) > 10;
 
             int maskSizeYOLO = cv::countNonZero(outputYOLO[1]);
             int maskSizeLast = cv::countNonZero(mImMaskLastKey);
@@ -1617,52 +1617,50 @@ Sophus::SE3f Tracking::GrabImageRGBD(const cv::Mat &imRGB, const cv::Mat &imD, c
     if(mFrameNum > 1) PredictCurrentMask();
     if(DiagnosticEnabled()) { Diagnostic().mask_pixels=cv::countNonZero(mImMask); ArchiveDiagnosticMask(mFrameNum-1,"prop",mImMask); }
 
-    // Static Tracking
-    if(mbStartOpticalFlow)
+    bool flowOK = false;
+    if(useOpticalFlow)
     {
-        // Define new frame without ORB features
-        mCurrentFrame = Frame(mbStartOpticalFlow);
+        mCurrentFrame = Frame(true);
         mCurrentFrame.mTimeStamp = timestamp;
-
-        bool flowOK=TrackWithOpticalFlow();
+        flowOK = TrackWithOpticalFlow() && mCurrentFrame.HasValidPose();
         if(DiagnosticEnabled()) Diagnostic().flow_ok=flowOK;
     }
 
-    if(!RGBDInitialized) mbNeedKF = true;
-    else if(RGBDInitialized) mbNeedKF = NeedNewKeyFrame();
-
-    // Keyframe Tracking
-    if(DiagnosticEnabled()) Diagnostic().orb_track=mbNeedKF;
-    if(mbNeedKF)
+    // Tracking recovery must not be gated by keyframe insertion cooldowns.
+    const bool forceORB = !useOpticalFlow || !flowOK || mState!=OK;
+    mbStartOpticalFlow = useOpticalFlow;
+    mbNeedKF = mFrameNum<=3 || !mapInitialized || (!forceORB && NeedNewKeyFrame());
+    const bool runORB = forceORB || mbNeedKF;
+    if(DiagnosticEnabled()) { Diagnostic().orb_track=runORB; Diagnostic().fallback_forced=useOpticalFlow && !flowOK; }
+    if(runORB)
     {
-        Sophus::SE3f Tcw;
-        if(mbStartOpticalFlow) Tcw = mCurrentFrame.GetPose();
-
+        Sophus::SE3f flowPose;
+        if(flowOK) flowPose = mCurrentFrame.GetPose();
         if(cv::countNonZero(mImMask)!=0 || cv::countNonZero(mImMaskLastKey)!=0) mpORBextractorTmp = mpORBextractorDyna;
         else mpORBextractorTmp = mpORBextractorLeft;
 
-        // Define new frame with ORB features
+        // Reuse the input frame ID even when optical flow failed.
         if(mSensor == System::RGBD)
-            mCurrentFrame = Frame(mImGray,mImDepth,mImMask,timestamp,mpORBextractorTmp,mpORBVocabulary,mK,mDistCoef,mbf,mThDepth,mpCamera,!mbStartOpticalFlow);
+            mCurrentFrame = Frame(mImGray,mImDepth,mImMask,timestamp,mpORBextractorTmp,mpORBVocabulary,mK,mDistCoef,mbf,mThDepth,mpCamera,!useOpticalFlow);
         else if(mSensor == System::IMU_RGBD)
-            mCurrentFrame = Frame(mImGray,mImDepth,mImMask,timestamp,mpORBextractorTmp,mpORBVocabulary,mK,mDistCoef,mbf,mThDepth,mpCamera,!mbStartOpticalFlow,&mLastFrame,*mpImuCalib);
-
-        if(mbStartOpticalFlow) mCurrentFrame.SetPose(Tcw);
-        
+            mCurrentFrame = Frame(mImGray,mImDepth,mImMask,timestamp,mpORBextractorTmp,mpORBVocabulary,mK,mDistCoef,mbf,mThDepth,mpCamera,!useOpticalFlow,&mLastFrame,*mpImuCalib);
+        if(flowOK) mCurrentFrame.SetPose(flowPose);
+        if(forceORB && mapInitialized && mFrameNum>3) mbNeedKF=NeedNewKeyFrame();
         Track();
     }
     else
     {
-        // Save camera trajectory.
-        if(!mCurrentFrame.mpReferenceKF) mCurrentFrame.mpReferenceKF = mpReferenceKF;
-        Sophus::SE3f Tcr_ = mCurrentFrame.GetPose() * mCurrentFrame.mpReferenceKF->GetPoseInverse();
-        mlRelativeFramePoses.push_back(Tcr_);
-        mlpReferences.push_back(mCurrentFrame.mpReferenceKF);
-        mlFrameTimes.push_back(mCurrentFrame.mTimeStamp);
-        mlbLost.push_back(mState==LOST);
+        if(!mCurrentFrame.mpReferenceKF) mCurrentFrame.mpReferenceKF=mpReferenceKF;
+        StoreCurrentFramePose();
     }
 
-    mVelocityLK = mCurrentFrame.GetPose() * mLastFrameLK.GetPose().inverse();
+    const bool poseValid = mState==OK && mCurrentFrame.HasValidPose();
+    if(!poseValid) mCurrentFrame.InvalidatePose();
+    if(poseValid && mLastFrameLK.HasValidPose())
+        mVelocityLK = mCurrentFrame.GetPose() * mLastFrameLK.GetPose().inverse();
+    else
+        mVelocityLK = Sophus::SE3f();
+    if(DiagnosticEnabled()) Diagnostic().pose_valid=poseValid;
     mImGrayLastKey = mImGray.clone();
     mImMaskLastKey = mImMask.clone();
 
@@ -2043,7 +2041,7 @@ void Tracking::Track()
     else
     {
         // System is initialized. Track Frame.
-        bool bOK;
+        bool bOK = false;
 
 #ifdef REGISTER_TIMES
         std::chrono::steady_clock::time_point time_StartPosePred = std::chrono::steady_clock::now();
@@ -2259,6 +2257,7 @@ void Tracking::Track()
                 bOK = TrackLocalMap();
         }
 
+        if(bOK && !mCurrentFrame.HasValidPose()) bOK=false;
         if(bOK)
             mState = OK;
         else if (mState == OK)
@@ -2319,13 +2318,13 @@ void Tracking::Track()
 
         // Update drawer
         mpFrameDrawer->Update(this);
-        if(mCurrentFrame.isSet())
+        if(mState==OK && mCurrentFrame.HasValidPose())
             mpMapDrawer->SetCurrentCameraPose(mCurrentFrame.GetPose());
 
         if(bOK || mState==RECENTLY_LOST)
         {
             // Update motion model
-            if(mLastFrame.isSet() && mCurrentFrame.isSet())
+            if(bOK && mLastFrame.HasValidPose() && mCurrentFrame.HasValidPose())
             {
                 Sophus::SE3f LastTwc = mLastFrame.GetPose().inverse();
                 mVelocity = mCurrentFrame.GetPose() * LastTwc;
@@ -2413,6 +2412,7 @@ void Tracking::Track()
 
         if(!mCurrentFrame.mpReferenceKF)
             mCurrentFrame.mpReferenceKF = mpReferenceKF;
+        if(mState!=OK) mCurrentFrame.InvalidatePose();
 
         mLastFrame = Frame(mCurrentFrame);
     }
@@ -2420,27 +2420,7 @@ void Tracking::Track()
 
 
 
-    if(mState==OK || mState==RECENTLY_LOST)
-    {
-        // Store frame pose information to retrieve the complete camera trajectory afterwards.
-        if(mCurrentFrame.isSet())
-        {
-            Sophus::SE3f Tcr_ = mCurrentFrame.GetPose() * mCurrentFrame.mpReferenceKF->GetPoseInverse();
-            mlRelativeFramePoses.push_back(Tcr_);
-            mlpReferences.push_back(mCurrentFrame.mpReferenceKF);
-            mlFrameTimes.push_back(mCurrentFrame.mTimeStamp);
-            mlbLost.push_back(mState==LOST);
-        }
-        else
-        {
-            // This can happen if tracking is lost
-            mlRelativeFramePoses.push_back(mlRelativeFramePoses.back());
-            mlpReferences.push_back(mlpReferences.back());
-            mlFrameTimes.push_back(mlFrameTimes.back());
-            mlbLost.push_back(mState==LOST);
-        }
-
-    }
+    StoreCurrentFramePose();
 
 #ifdef REGISTER_LOOP
     if (Stop()) {
@@ -2989,7 +2969,7 @@ bool Tracking::TrackWithMotionModel()
         PredictStateIMU();
         return true;
     }
-    else if (!mbStartOpticalFlow)
+    else if (!mbStartOpticalFlow || !mCurrentFrame.HasValidPose())
     {
         mCurrentFrame.SetPose(mVelocity * mLastFrame.GetPose());
     }
@@ -3071,6 +3051,23 @@ bool Tracking::TrackWithMotionModel()
         return nmatchesMap>=10;
 }
 
+bool Tracking::StoreCurrentFramePose()
+{
+    if(mState!=OK || !mCurrentFrame.HasValidPose() || !mCurrentFrame.mpReferenceKF ||
+       !std::isfinite(mCurrentFrame.mTimeStamp))
+        return false;
+    const Sophus::SE3f referencePose=mCurrentFrame.mpReferenceKF->GetPoseInverse();
+    if(!Frame::IsValidPose(referencePose)) return false;
+    const Sophus::SE3f relativePose=mCurrentFrame.GetPose()*referencePose;
+    if(!Frame::IsValidPose(relativePose)) return false;
+    mlRelativeFramePoses.push_back(relativePose);
+    mlpReferences.push_back(mCurrentFrame.mpReferenceKF);
+    mlFrameTimes.push_back(mCurrentFrame.mTimeStamp);
+    mlbLost.push_back(false);
+    if(DiagnosticEnabled()) Diagnostic().pose_saved=1;
+    return true;
+}
+
 bool Tracking::TrackWithOpticalFlow()
 {
     ORBmatcher matcher(0.9,true);
@@ -3081,6 +3078,7 @@ bool Tracking::TrackWithOpticalFlow()
     {
         std::cout << "Not enough matches for SearchByOpticalFlow() !!" << std::endl;
         mnMatchesInliers = 0;
+        mCurrentFrame.InvalidatePose();
         return false;
     }
 
@@ -3093,6 +3091,7 @@ bool Tracking::TrackWithOpticalFlow()
         cv::Point3f position_cv;
         Eigen::Vector3f position_eigen;
         position_eigen = mCurrentFrame.mvpMapPoints[i]->GetWorldPos();
+        if(!position_eigen.allFinite()) { mnMatchesInliers=0; mCurrentFrame.InvalidatePose(); return false; }
         position_cv.x = static_cast<float>(position_eigen[0]);
         position_cv.y = static_cast<float>(position_eigen[1]);
         position_cv.z = static_cast<float>(position_eigen[2]);
@@ -3104,21 +3103,19 @@ bool Tracking::TrackWithOpticalFlow()
     // ---------- Estimate pose by PnP Ransac ----------
     std::vector<int> ransacInlier;
     cv::Mat R_vector, R;
-    Sophus::SE3f initTcw = mVelocityLK * mLastFrameLK.GetPose();
 
-    Eigen::Matrix3f r_eigen = initTcw.rotationMatrix();
-    Eigen::Vector3f t_eigen = initTcw.translation();
-
-    cv::Mat R_matrix(3, 3, CV_32F);
-    cv::Mat T(3, 1, CV_32F);
-
-    std::memcpy(R_matrix.data, r_eigen.data(), 3 * 3 * sizeof(float));
-    std::memcpy(T.data, t_eigen.data(), 3 * sizeof(float));
-    cv::Rodrigues(R_matrix, R_vector);
-
-    bool diagnosticPnpOK=cv::solvePnPRansac(currMapPoints, currKeyPoints, mK, mDistCoef , R_vector, T, false, 100, 5, 0.99, ransacInlier, cv::SOLVEPNP_ITERATIVE);
-    if(DiagnosticEnabled()) { Diagnostic().pnp_ok=diagnosticPnpOK; Diagnostic().pnp_inliers=ransacInlier.size(); }
+    cv::Mat T;
+    const bool pnpOK=cv::solvePnPRansac(currMapPoints, currKeyPoints, mK, mDistCoef, R_vector, T,
+                                      false, 100, 5, 0.99, ransacInlier, cv::SOLVEPNP_ITERATIVE);
+    if(DiagnosticEnabled()) { Diagnostic().pnp_ok=pnpOK; Diagnostic().pnp_inliers=ransacInlier.size(); }
+    if(!pnpOK || ransacInlier.size()<20 || !cv::checkRange(R_vector) || !cv::checkRange(T))
+    {
+        mnMatchesInliers=0;
+        mCurrentFrame.InvalidatePose();
+        return false;
+    }
     cv::Rodrigues(R_vector, R);
+    if(!cv::checkRange(R)) { mnMatchesInliers=0; mCurrentFrame.InvalidatePose(); return false; }
 
     cv::Mat R_float, T_float;
     R.convertTo(R_float, CV_32F);
@@ -3131,6 +3128,8 @@ bool Tracking::TrackWithOpticalFlow()
                 R_float.at<float>(2,0), R_float.at<float>(2,1), R_float.at<float>(2,2);
     translation << T_float.at<float>(0), T_float.at<float>(1), T_float.at<float>(2);
     Sophus::SE3f currTcw = Sophus::SE3f(rotation, translation);
+
+    if(!Frame::IsValidPose(currTcw)) { mnMatchesInliers=0; mCurrentFrame.InvalidatePose(); return false; }
 
     // ---------- Draw extracted LK points and get inliers ----------
     cv::Mat imgWithLKPoints = mImGray.clone();
@@ -3165,7 +3164,8 @@ bool Tracking::TrackWithOpticalFlow()
     {
         mnMatchesInliers = 0;
         if(DiagnosticEnabled()) Diagnostic().velocity_reject=1;
-        mCurrentFrame.SetPose(initTcw);
+        mCurrentFrame.InvalidatePose();
+        return false;
     }
     else
     {       
@@ -4366,19 +4366,13 @@ void Tracking::ComputePixelPotential(int& potential, const cv::Point2f& pixel, c
     // Define the Bresenham circle of radius 3 around the pixel
     std::vector<cv::Point2f> circleOffsets = { cv::Point2f(-3, 0), cv::Point2f(0, 3), cv::Point2f(3, 0), cv::Point2f(0, -3) };
 
-    // Ensure the pixel is within the valid range
-    for (const cv::Point2f& offset : circleOffsets)
-    {
-        if (pixel.x + offset.x < 0 || pixel.x + offset.x >= imGray.cols ||
-            pixel.y + offset.y < 0 || pixel.y + offset.y >= imGray.rows)
-        {
-            potential = -1;
-        }
-    }
+    potential = -1;
+    if(imGray.empty() || imGray.type()!=CV_8UC1 || !std::isfinite(pixel.x) || !std::isfinite(pixel.y) ||
+       pixel.x<3 || pixel.y<3 || pixel.x>=imGray.cols-3 || pixel.y>=imGray.rows-3)
+        return;
     potential = 0;
-
     int centerIntensity = (int)imGray.at<uchar>(pixel.y, pixel.x);
-    int isBrighter, isDarker;
+    int isBrighter = 0, isDarker = 0;
     int brightLowerBound = -1;
     int darkLowerBound = -1;
 
@@ -4411,6 +4405,7 @@ void Tracking::ComputePixelPotential(int& potential, const cv::Point2f& pixel, c
 void Tracking::ExtractDynaPoints(std::vector<cv::Point2f>& dynapoints, const cv::Mat& imGray, const cv::Mat& imMask, int cellSize)
 {
     dynapoints.clear();
+    if(cellSize<=0 || imGray.empty() || imGray.type()!=CV_8UC1 || imMask.type()!=CV_8UC1 || imGray.size()!=imMask.size()) return;
     int threshold = 250;
 
     for (int y = 0; y < imGray.rows; y += cellSize)

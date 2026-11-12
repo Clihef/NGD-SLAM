@@ -231,6 +231,7 @@ protected:
     bool PredictStateIMU();
 
     bool TrackWithOpticalFlow();
+    bool StoreCurrentFramePose();
 
     bool Relocalization();
 
@@ -246,8 +247,8 @@ protected:
 
     // For Dynamic Mode Functions
     void PredictCurrentMask();
-    void ComputePixelPotential(int& potential, const cv::Point2f& pixel, const cv::Mat& imGray);
-    void ExtractDynaPoints(std::vector<cv::Point2f>& dynapoints, const cv::Mat& imGray, const cv::Mat& imMask, int cellSize);
+    static void ComputePixelPotential(int& potential, const cv::Point2f& pixel, const cv::Mat& imGray);
+    static void ExtractDynaPoints(std::vector<cv::Point2f>& dynapoints, const cv::Mat& imGray, const cv::Mat& imMask, int cellSize);
     void ClusterWithDBSCAN(std::map<int, std::vector<cv::Point3f>>& clusters, const std::vector<cv::Point3f>& points, float eps, int minPts);
     void CreateMaskFromClusters(const std::map<int, std::vector<cv::Point3f>>& clusters);
 

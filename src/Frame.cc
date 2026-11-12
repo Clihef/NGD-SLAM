@@ -553,6 +553,7 @@ bool Frame::isSet() const {
 }
 
 void Frame::SetPose(const Sophus::SE3<float> &Tcw) {
+    if(!IsValidPose(Tcw)) { InvalidatePose(); return; }
     mTcw = Tcw;
 
     UpdatePoseMatrices();

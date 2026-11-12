@@ -325,6 +325,7 @@ Sophus::SE3f System::TrackStereo(const cv::Mat &imLeft, const cv::Mat &imRight, 
 
     unique_lock<mutex> lock2(mMutexState);
     mTrackingState = mpTracker->mState;
+    mTrackingPoseValid = mpTracker->mState==Tracking::OK && mpTracker->mCurrentFrame.HasValidPose();
     mTrackedMapPoints = mpTracker->mCurrentFrame.mvpMapPoints;
     mTrackedKeyPointsUn = mpTracker->mCurrentFrame.mvKeysUn;
 
@@ -397,6 +398,7 @@ Sophus::SE3f System::TrackRGBD(const cv::Mat &im, const cv::Mat &depthmap, const
 
     unique_lock<mutex> lock2(mMutexState);
     mTrackingState = mpTracker->mState;
+    mTrackingPoseValid = mpTracker->mState==Tracking::OK && mpTracker->mCurrentFrame.HasValidPose();
     mTrackedMapPoints = mpTracker->mCurrentFrame.mvpMapPoints;
     mTrackedKeyPointsUn = mpTracker->mCurrentFrame.mvKeysUn;
     return Tcw;
@@ -473,6 +475,7 @@ Sophus::SE3f System::TrackMonocular(const cv::Mat &im, const double &timestamp, 
 
     unique_lock<mutex> lock2(mMutexState);
     mTrackingState = mpTracker->mState;
+    mTrackingPoseValid = mpTracker->mState==Tracking::OK && mpTracker->mCurrentFrame.HasValidPose();
     mTrackedMapPoints = mpTracker->mCurrentFrame.mvpMapPoints;
     mTrackedKeyPointsUn = mpTracker->mCurrentFrame.mvKeysUn;
 
@@ -631,6 +634,7 @@ void System::SaveTrajectoryTUM(const string &filename)
 
     // Transform all keyframes so that the first keyframe is at the origin.
     // After a loop closure the first keyframe might not be at the origin.
+    if(vpKFs.empty()) { ofstream(filename).close(); return; }
     Sophus::SE3f Two = vpKFs[0]->GetPoseInverse();
 
     ofstream f;
@@ -653,19 +657,22 @@ void System::SaveTrajectoryTUM(const string &filename)
             continue;
 
         KeyFrame* pKF = *lRit;
+        if(!pKF || !std::isfinite(*lT) || !Frame::IsValidPose(*lit)) continue;
 
         Sophus::SE3f Trw;
 
         // If the reference keyframe was culled, traverse the spanning tree to get a suitable keyframe.
-        while(pKF->isBad())
+        while(pKF && pKF->isBad())
         {
             Trw = Trw * pKF->mTcp;
             pKF = pKF->GetParent();
         }
+        if(!pKF) continue;
 
         Trw = Trw * pKF->GetPose() * Two;
 
         Sophus::SE3f Tcw = (*lit) * Trw;
+        if(!Frame::IsValidPose(Tcw)) continue;
         Sophus::SE3f Twc = Tcw.inverse();
 
         Eigen::Vector3f twc = Twc.translation();
@@ -700,6 +707,7 @@ void System::SaveKeyFrameTrajectoryTUM(const string &filename)
             continue;
 
         Sophus::SE3f Twc = pKF->GetPoseInverse();
+        if(!Frame::IsValidPose(Twc) || !std::isfinite(pKF->mTimeStamp)) continue;
         Eigen::Quaternionf q = Twc.unit_quaternion();
         Eigen::Vector3f t = Twc.translation();
         f << setprecision(6) << pKF->mTimeStamp << setprecision(7) << " " << t(0) << " " << t(1) << " " << t(2)
@@ -1368,6 +1376,12 @@ void System::SaveDebugData(const int &initIdx)
     f.close();
 }
 
+
+bool System::HasValidPose()
+{
+    unique_lock<mutex> lock(mMutexState);
+    return mTrackingPoseValid;
+}
 
 int System::GetTrackingState()
 {

@@ -72,7 +72,7 @@ int main(int argc, char **argv)
             cerr << "Cannot open frame_metrics.csv" << endl;
             return 1;
         }
-        frameMetrics << "frame,timestamp,tracking_ms,state\n" << setprecision(17);
+        frameMetrics << "frame,timestamp,tracking_ms,state,pose_valid\n" << setprecision(17);
     }
     ORB_SLAM3::System SLAM(argv[1],argv[2],ORB_SLAM3::System::RGBD,useViewer);
     float imageScale = SLAM.GetImageScale();
@@ -129,7 +129,7 @@ int main(int argc, char **argv)
         vTimesTrack[ni]=ttrack;
         if(recordExperiment)
             frameMetrics << ni << "," << tframe << "," << ttrack*1000.0
-                         << "," << SLAM.GetTrackingState() << "\n";
+                         << "," << SLAM.GetTrackingState() << "," << SLAM.HasValidPose() << "\n";
 
         // Wait to load the next frame
         double T=0;

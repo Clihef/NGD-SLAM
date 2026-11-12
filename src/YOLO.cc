@@ -92,6 +92,8 @@ namespace ORB_SLAM3
 				boxTight.width = std::min(boxTight.width, imDepthLocal.cols - boxTight.x);
 				boxTight.height = std::min(boxTight.height, imDepthLocal.rows - boxTight.y);
 
+				boxTight &= cv::Rect(0,0,imDepthLocal.cols,imDepthLocal.rows);
+                if(boxTight.empty()) continue;
 				cv::Mat imBoxTight = imDepthLocal(boxTight);
 
 				// Compute median in box
@@ -104,7 +106,7 @@ namespace ORB_SLAM3
 						if (val >= 0.05) validPixelsInBox.push_back(val);
 					}
 				}
-				if(validPixelsInBox.size() / (float)(boxTight.width * boxTight.height) < 0.7) continue;
+				if(validPixelsInBox.empty() || validPixelsInBox.size() / (float)boxTight.area() < 0.7) continue;
 
 				std::sort(validPixelsInBox.begin(), validPixelsInBox.end());
 				float median = validPixelsInBox[validPixelsInBox.size() / 2];
@@ -141,6 +143,7 @@ namespace ORB_SLAM3
 					}
 				}
 
+                if(largestArea==0) continue;
 				for (int y = 0; y < labels.rows; ++y)
 				{
 					for (int x = 0; x < labels.cols; ++x)

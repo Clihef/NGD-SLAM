@@ -21,6 +21,7 @@
 #define FRAME_H
 
 #include<vector>
+#include<cmath>
 
 #include "Thirdparty/DBoW2/DBoW2/BowVector.h"
 #include "Thirdparty/DBoW2/DBoW2/FeatureVector.h"
@@ -165,6 +166,14 @@ public:
         return mbHasPose;
     }
 
+    static bool IsValidPose(const Sophus::SE3f& pose) {
+        return pose.matrix().allFinite() &&
+               std::abs(pose.unit_quaternion().squaredNorm()-1.0f) < 1e-3f;
+    }
+
+    bool HasValidPose() const { return HasPose() && IsValidPose(mTcw); }
+    void InvalidatePose() { mbHasPose=false; mbIsSet=false; }
+
     inline bool HasVelocity() const {
         return mbHasVelocity;
     }
@@ -185,8 +194,8 @@ private:
     //Twc_ not necessary as Sophus has a method for easily computing the inverse pose: Tcw_.inverse()
 
     Sophus::SE3<float> mTlr, mTrl;
-    Eigen::Matrix<float,3,3> mRlr;
-    Eigen::Vector3f mtlr;
+    Eigen::Matrix<float,3,3> mRlr = Eigen::Matrix3f::Identity();
+    Eigen::Vector3f mtlr = Eigen::Vector3f::Zero();
 
 
     // IMU linear velocity
@@ -197,20 +206,20 @@ public:
     EIGEN_MAKE_ALIGNED_OPERATOR_NEW
 
     // Vocabulary used for relocalization.
-    ORBVocabulary* mpORBvocabulary;
+    ORBVocabulary* mpORBvocabulary = nullptr;
 
     // Feature extractor. The right is used only in the stereo case.
-    ORBextractor* mpORBextractorLeft, *mpORBextractorRight;
+    ORBextractor* mpORBextractorLeft = nullptr, *mpORBextractorRight = nullptr;
 
     // Is keyframe or not
-    bool mbIsKeyFrame;
+    bool mbIsKeyFrame = false;
 
     // Frame timestamp.
-    double mTimeStamp;
+    double mTimeStamp = 0;
 
     // Calibration matrix and OpenCV distortion parameters.
     cv::Mat mK;
-    Eigen::Matrix3f mK_;
+    Eigen::Matrix3f mK_ = Eigen::Matrix3f::Identity();
     static float fx;
     static float fy;
     static float cx;
@@ -220,17 +229,17 @@ public:
     cv::Mat mDistCoef;
 
     // Stereo baseline multiplied by fx.
-    float mbf;
+    float mbf = 0;
 
     // Stereo baseline in meters.
-    float mb;
+    float mb = 0;
 
     // Threshold close/far points. Close points are inserted from 1 view.
     // Far points are inserted as in the monocular case from 2 views.
-    float mThDepth;
+    float mThDepth = 0;
 
     // Number of KeyPoints.
-    int N;
+    int N = 0;
 
     // Vector of keypoints (original for visualization) and undistorted (actually used by the system).
     // In the stereo case, mvKeysUn is redundant as images must be rectified.
@@ -254,7 +263,7 @@ public:
     // MapPoints associated to keypoints, NULL pointer if no association.
     // Flag to identify outlier associations.
     std::vector<bool> mvbOutlier;
-    int mnCloseMPs;
+    int mnCloseMPs = 0;
 
     // Keypoints are assigned to cells in a grid to reduce matching complexity when projecting MapPoints.
     static float mfGridElementWidthInv;
@@ -271,7 +280,7 @@ public:
 
     // Imu preintegration from last keyframe
     IMU::Preintegrated* mpImuPreintegrated;
-    KeyFrame* mpLastKeyFrame;
+    KeyFrame* mpLastKeyFrame = nullptr;
 
     // Pointer to previous frame
     Frame* mpPrevFrame;
@@ -279,15 +288,15 @@ public:
 
     // Current and Next Frame id.
     static long unsigned int nNextId;
-    long unsigned int mnId;
+    long unsigned int mnId = 0;
 
     // Reference Keyframe.
     KeyFrame* mpReferenceKF;
 
     // Scale pyramid info.
-    int mnScaleLevels;
-    float mfScaleFactor;
-    float mfLogScaleFactor;
+    int mnScaleLevels = 0;
+    float mfScaleFactor = 1;
+    float mfLogScaleFactor = 0;
     vector<float> mvScaleFactors;
     vector<float> mvInvScaleFactors;
     vector<float> mvLevelSigma2;
@@ -306,7 +315,7 @@ public:
 
     string mNameFile;
 
-    int mnDataset;
+    int mnDataset = 0;
 
 #ifdef REGISTER_TIMES
     double mTimeORB_Ext;
@@ -330,15 +339,15 @@ private:
 
     bool mbImuPreintegrated;
 
-    std::mutex *mpMutexImu;
+    std::mutex *mpMutexImu = nullptr;
 
 public:
-    GeometricCamera* mpCamera, *mpCamera2;
+    GeometricCamera* mpCamera = nullptr, *mpCamera2 = nullptr;
 
     //Number of KeyPoints extracted in the left and right images
-    int Nleft, Nright;
+    int Nleft = -1, Nright = -1;
     //Number of Non Lapping Keypoints
-    int monoLeft, monoRight;
+    int monoLeft = -1, monoRight = -1;
 
     //For stereo matching
     std::vector<int> mvLeftToRightMatch, mvRightToLeftMatch;

@@ -44,7 +44,7 @@ namespace ORB_SLAM3
             std::mutex mOutputMutex;
             std::mutex mMutexFinish;
 
-            bool mbFinishRequested;
+            bool mbFinishRequested = false;
 
         private:
             float confThreshold;
