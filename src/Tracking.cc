@@ -22,6 +22,7 @@
 #include "ORBmatcher.h"
 #include "Diagnostics.h"
 #include "RpyRecoveryProbe.h"
+#include "RecoveryCapture.h"
 #include "ExperimentObservation.h"
 #include <opencv2/imgcodecs.hpp>
 
@@ -1618,6 +1619,7 @@ Sophus::SE3f Tracking::GrabImageRGBD(const cv::Mat &imRGB, const cv::Mat &imD, c
     }
     if(DiagnosticEnabled()) { Diagnostic().mask_source=maskSource; Diagnostic().mask_timestamp=maskTimestamp; }
     if(mFrameNum > 1) PredictCurrentMask();
+    RecoveryCapture::Image(mFrameNum-1,mImRGB,mImMask);
     if(DiagnosticEnabled()) { Diagnostic().mask_pixels=cv::countNonZero(mImMask); ArchiveDiagnosticMask(mFrameNum-1,"prop",mImMask); }
 
     bool flowOK = false;
@@ -2980,7 +2982,7 @@ bool Tracking::TrackWithMotionModel()
     }
     else if (!mbStartOpticalFlow || !mCurrentFrame.HasValidPose())
     {
-        if(RecoveryProbe::Enabled(mFrameNum-1) && mbStartOpticalFlow && mLastFrameLK.HasValidPose())
+        if(std::getenv("NGD_RECOVERY_PROBE") && RecoveryProbe::Enabled(mFrameNum-1) && mbStartOpticalFlow && mLastFrameLK.HasValidPose())
             RecoveryProbe::Compare(mFrameNum-1,mCurrentFrame,mLastFrame,mLastFrameLK,
                                    mVelocity*mLastFrame.GetPose(),
                                    (mVelocityInterval>0 ? Sophus::SE3f::exp(mVelocity.log()*float((mCurrentFrame.mTimeStamp-mLastFrame.mTimeStamp)/mVelocityInterval)) : mVelocity)*mLastFrame.GetPose(),
@@ -2995,6 +2997,7 @@ bool Tracking::TrackWithMotionModel()
 
 
 
+    RecoveryCapture::Scene(mFrameNum-1,mCurrentFrame,mLastFrame,mVelocity,mVelocityInterval);
     fill(mCurrentFrame.mvpMapPoints.begin(),mCurrentFrame.mvpMapPoints.end(),static_cast<MapPoint*>(NULL));
 
     // Project points seen in previous frame
@@ -3124,8 +3127,10 @@ bool Tracking::TrackWithOpticalFlow()
     cv::Mat R_vector, R;
 
     cv::Mat T;
+    const uint64_t pnpRngBefore=cv::theRNG().state;
     const bool pnpOK=cv::solvePnPRansac(currMapPoints, currKeyPoints, mK, mDistCoef, R_vector, T,
                                       false, 100, 5, 0.99, ransacInlier, cv::SOLVEPNP_ITERATIVE);
+    RecoveryCapture::PnP(mFrameNum-1,mCurrentFrame.mTimeStamp,currMapPoints,currKeyPoints,mK,mDistCoef,R_vector,T,ransacInlier,pnpOK,pnpRngBefore,cv::theRNG().state);
     if(DiagnosticEnabled()) { Diagnostic().pnp_ok=pnpOK; Diagnostic().pnp_inliers=ransacInlier.size(); }
     if(!pnpOK || ransacInlier.size()<20 || !cv::checkRange(R_vector) || !cv::checkRange(T))
     {

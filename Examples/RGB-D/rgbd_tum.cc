@@ -27,6 +27,7 @@
 #include<opencv2/core/core.hpp>
 
 #include<System.h>
+#include "RecoveryCapture.h"
 
 using namespace std;
 
@@ -146,6 +147,7 @@ int main(int argc, char **argv)
 
     // Stop all threads
     SLAM.Shutdown();
+    ORB_SLAM3::RecoveryCapture::Flush();
     if(recordExperiment)
     {
         frameMetrics.close();

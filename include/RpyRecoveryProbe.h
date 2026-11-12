@@ -9,7 +9,7 @@
 #include <memory>
 #include <unordered_map>
 namespace ORB_SLAM3 { namespace RecoveryProbe {
-inline bool Enabled(long frame) {return std::getenv("NGD_RECOVERY_PROBE") && frame>=550 && frame<=575;}
+inline bool Enabled(long frame) {return (std::getenv("NGD_RECOVERY_PROBE") || std::getenv("NGD_RECOVERY_CAPTURE")) && frame>=550 && frame<=580;}
 inline void Pose(long frame,double timestamp,const char* stage,const Sophus::SE3f& Tcw,int matches,int inliers,double lastOrb,double lastLK) {
  if(!Enabled(frame))return;
  static std::ofstream f("recovery_stage_poses.csv");static bool header=false;
@@ -40,7 +40,7 @@ inline Candidate Project(Frame current,const Frame& last,const Sophus::SE3f& see
 // Freeze geometry/descriptors/counts so the two predictions see exactly the same map and image features.
 inline void Compare(long frame,const Frame& original,const Frame& previous,const Frame& lastLK,
                     const Sophus::SE3f& legacySeed,const Sophus::SE3f& scaledSeed,const Sophus::SE3f& lkSeed) {
- if(!Enabled(frame)||original.Nleft!=-1)return;
+ if(!std::getenv("NGD_RECOVERY_PROBE")||!Enabled(frame)||original.Nleft!=-1)return;
  Frame frozenLast(previous),frozenCurrent(original);std::unordered_map<MapPoint*,std::unique_ptr<FrozenPoint>> points;
  for(auto*& p:frozenLast.mvpMapPoints) if(p){auto it=points.find(p);if(it==points.end())it=points.emplace(p,std::unique_ptr<FrozenPoint>(new FrozenPoint(p))).first;p=it->second.get();}
  std::fill(frozenCurrent.mvpMapPoints.begin(),frozenCurrent.mvpMapPoints.end(),nullptr);
